@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D Cricket Game</title>
+    <style>
+        canvas {
+            border: 1px solid black;
+            display: block;
+            margin: 0 auto;
+        }
+        .controls {
+            text-align: center;
+            margin: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 16px;
+        }
+        #score {
+            text-align: center;
+            font-size: 20px;
+            margin: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="score">Score: 0 | Balls: 0/6 | Runs to Win: 30</div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div class="controls">
+        <button onclick="playShot('defensive')">Defensive Shot</button>
+        <button onclick="playShot('ground')">Ground Shot</button>
+        <button onclick="playShot('lofted')">Lofted Shot</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Game state
+        let score = 0;
+        let balls = 0;
+        let target = 30; // Target score to win
+        let gameState = 'waiting'; // waiting, bowling, ballInPlay, running, over
+        let ball = { x: 700, y: 300, vx: 0, vy: 0, radius: 5 };
+        let batsman = { x: 100, y: 300, batAngle: 0, swing: false };
+        let bowler = { x: 700, y: 300, running: false, frame: 0 };
+        let umpire = { x: 150, y: 300 };
+        let fielders = [
+            { x: 300, y: 200 }, { x: 300, y: 400 }, // Close fielders
+            { x: 500, y: 150 }, { x: 500, y: 450 }, // Midfield
+            { x: 700, y: 100 }, { x: 700, y: 500 }, // Boundary
+            { x: 600, y: 200 }, { x: 600, y: 400 },
+            { x: 400, y: 250 }, { x: 400, y: 350 },
+            { x: 200, y: 300 } // Wicketkeeper
+        ];
+
+        // Physics constants
+        const gravity = 0.2;
+        const friction = 0.98;
+        const yard = 5; // Pixels per yard (approx scale)
+
+        // Update score display
+        function updateScore() {
+            document.getElementById('score').innerText = `Score: ${score} | Balls: ${balls}/6 | Runs to Win: ${target - score}`;
+        }
+
+        // Draw the field
+        function drawField() {
+            // Green outfield
+            ctx.fillStyle = 'green';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Crease
+            ctx.fillStyle = 'white';
+            ctx.fillRect(80, 290, 40, 20); // Batting crease
+            ctx.fillRect(680, 290, 40, 20); // Bowling crease
+        }
+
+        // Draw players and objects
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawField();
+
+            // Umpire
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(umpire.x, umpire.y, 10, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Fielders
+            ctx.fillStyle = 'blue';
+            fielders.forEach(fielder => {
+                ctx.beginPath();
+                ctx.arc(fielder.x, fielder.y, 8, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Batsman
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(batsman.x, batsman.y, 10, 0, Math.PI * 2);
+            ctx.fill();
+            // Bat
+            ctx.save();
+            ctx.translate(batsman.x, batsman.y);
+            ctx.rotate(batsman.batAngle);
+            ctx.fillStyle = 'brown';
+            ctx.fillRect(0, -5, 30, 10);
+            ctx.restore();
+
+            // Bowler
+            ctx.fillStyle = 'purple';
+            ctx.beginPath();
+            ctx.arc(bowler.x, bowler.y, 10, 0, Math.PI * 2);
+            ctx.fill();
+            if (bowler.running) {
+                // Simple arm swing animation
+                ctx.save();
+                ctx.translate(bowler.x, bowler.y);
+                ctx.rotate(Math.sin(bowler.frame * 0.2) * 0.3);
+                ctx.fillStyle = 'purple';
+                ctx.fillRect(0, -5, 20, 5); // Arm
+                ctx.restore();
+            }
+
+            // Ball
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Bowling logic
+        function startBowling() {
+            if (gameState !== 'waiting' || balls >= 6) return;
+            gameState = 'bowling';
+            bowler.running = true;
+            bowler.frame = 0;
+            ball.x = bowler.x;
+            ball.y = bowler.y;
+        }
+
+        // Shot logic
+        function playShot(type) {
+            if (gameState !== 'bowling' || ball.x > 150) return;
+            gameState = 'ballInPlay';
+            batsman.swing = true;
+            let power, angle;
+            if (type === 'defensive') {
+                power = 5;
+                angle = Math.PI / 4;
+                batsman.batAngle = Math.PI / 4;
+            } else if (type === 'ground') {
+                power = 10;
+                angle = Math.PI / 6;
+                batsman.batAngle = Math.PI / 6;
+            } else if (type === 'lofted') {
+                power = 15;
+                angle = Math.PI / 3;
+                batsman.batAngle = Math.PI / 3;
+            }
+            ball.vx = power * Math.cos(angle);
+            ball.vy = -power * Math.sin(angle); // Negative for upward motion
+        }
+
+        // Calculate runs based on ball distance
+        function calculateRuns() {
+            let distance = Math.sqrt((ball.x - batsman.x) ** 2 + (ball.y - batsman.y) ** 2) / yard;
+            if (distance > 60) return 2; // Beyond 60 yards
+            if (distance > 30) return 1; // Beyond 30 yards
+            return 0; // Stopped by fielders
+        }
+
+        // Game loop
+        function gameLoop() {
+            // Bowler run-up
+            if (gameState === 'bowling') {
+                bowler.frame++;
+                bowler.x -= 2; // Move towards batsman
+                ball.x = bowler.x;
+                if (bowler.x <= 680) {
+                    // Release ball
+                    ball.vx = -10; // Initial ball speed
+                    ball.vy = 0;
+                    bowler.running = false;
+                }
+            }
+
+            // Ball physics
+            if (gameState === 'ballInPlay') {
+                ball.x += ball.vx;
+                ball.y += ball.vy;
+                ball.vy += gravity; // Apply gravity for lofted shots
+                ball.vx *= friction; // Apply friction
+                ball.vy *= friction;
+
+                // Check for boundary or stop
+                if (ball.x >= canvas.width || ball.x <= 0 || ball.y >= canvas.height || ball.y <= 0) {
+                    let runs = calculateRuns();
+                    score += runs;
+                    balls++;
+                    gameState = runs > 0 ? 'running' : 'waiting';
+                    ball.x = 700;
+                    ball.y = 300;
+                    bowler.x = 700;
+                    batsman.batAngle = 0;
+                    batsman.swing = false;
+                    updateScore();
+                }
+
+                // Check for fielder catch/stop (simplified)
+                fielders.forEach(fielder => {
+                    let dist = Math.sqrt((ball.x - fielder.x) ** 2 + (ball.y - fielder.y) ** 2);
+                    if (dist < 15) {
+                        balls++;
+                        gameState = 'waiting';
+                        ball.x = 700;
+                        ball.y = 300;
+                        bowler.x = 700;
+                        batsman.batAngle = 0;
+                        batsman.swing = false;
+                        updateScore();
+                    }
+                });
+            }
+
+            // Check for game over
+            if (balls >= 6) {
+                gameState = 'over';
+                alert(`Game Over! Final Score: ${score}`);
+            } else if (score >= target) {
+                gameState = 'over';
+                alert(`You Win! Score: ${score} in ${balls} balls`);
+            }
+
+            drawGame();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start game
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && gameState === 'waiting') startBowling();
+        });
+        updateScore();
+        gameLoop();
+    </script>
+</body>
+</html>
