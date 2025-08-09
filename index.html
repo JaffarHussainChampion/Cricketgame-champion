@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>2D Cricket Game</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #87CEEB;
+      font-family: Arial, sans-serif;
+    }
+    canvas {
+      display: block;
+      background: #a5d152;
+    }
+    .controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    button {
+      padding: 10px 20px;
+      margin: 5px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div class="controls">
+  <button onclick="batSwing()">Swing Bat</button>
+</div>
+
+<script>
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  let bat = { x: 100, y: canvas.height - 200, width: 20, height: 100, angle: 0 };
+  let ball = { x: canvas.width - 50, y: canvas.height - 220, radius: 10, speedX: -6, speedY: -4 };
+
+  function drawBat() {
+    ctx.save();
+    ctx.translate(bat.x, bat.y);
+    ctx.rotate(bat.angle);
+    ctx.fillStyle = "brown";
+    ctx.fillRect(-bat.width/2, -bat.height, bat.width, bat.height);
+    ctx.restore();
+  }
+
+  function drawBall() {
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+    ctx.fillStyle = "white";
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  function updateBall() {
+    ball.x += ball.speedX;
+    ball.y += ball.speedY;
+    ball.speedY += 0.2; // gravity
+
+    // Bounce on ground
+    if (ball.y + ball.radius > canvas.height) {
+      ball.y = canvas.height - ball.radius;
+      ball.speedY *= -0.6;
+    }
+
+    // Collision with bat
+    if (ball.x - ball.radius < bat.x + 10 &&
+        ball.y > bat.y - bat.height &&
+        ball.y < bat.y &&
+        bat.angle !== 0) {
+      ball.speedX = 6;
+      ball.speedY = -6;
+    }
+  }
+
+  function batSwing() {
+    bat.angle = -Math.PI / 4;
+    setTimeout(() => { bat.angle = 0; }, 200);
+  }
+
+  function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawBat();
+    drawBall();
+    updateBall();
+    requestAnimationFrame(gameLoop);
+  }
+
+  gameLoop();
+</script>
+</body>
+</html>
