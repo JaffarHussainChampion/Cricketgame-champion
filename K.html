@@ -1,0 +1,77 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mobile Cricket Game</title>
+<style>
+    body { margin:0; background:#4CAF50; overflow:hidden; }
+    canvas { display:block; margin:0 auto; background: #cceeff; }
+    #controls { position: fixed; bottom: 20px; width: 100%; text-align: center; }
+    button { font-size: 20px; padding: 10px 20px; margin: 0 10px; border:none; border-radius:5px; background:#ff9800; color:white; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="controls">
+    <button onclick="bowlBall()">Bowl</button>
+    <button onclick="hitBall()">Hit</button>
+</div>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight - 100;
+
+let ball = { x: canvas.width/2, y: 50, r: 10, vx: 0, vy: 0, inPlay: false };
+let bat = { x: canvas.width/2, y: canvas.height - 50, w: 80, h: 10 };
+
+function drawBall() {
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2);
+    ctx.fillStyle = 'red';
+    ctx.fill();
+}
+
+function drawBat() {
+    ctx.fillStyle = 'brown';
+    ctx.fillRect(bat.x - bat.w/2, bat.y - bat.h/2, bat.w, bat.h);
+}
+
+function bowlBall() {
+    if (!ball.inPlay) {
+        ball.x = canvas.width/2;
+        ball.y = 50;
+        ball.vx = (Math.random() - 0.5) * 4;
+        ball.vy = 5;
+        ball.inPlay = true;
+    }
+}
+
+function hitBall() {
+    if (ball.inPlay && ball.y > bat.y - 30) {
+        ball.vy = -10;
+        ball.vx += (Math.random() - 0.5) * 6;
+    }
+}
+
+function update() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if (ball.inPlay) {
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+        ball.vy += 0.3; // gravity
+        if (ball.y + ball.r > canvas.height) {
+            ball.inPlay = false;
+        }
+    }
+    drawBall();
+    drawBat();
+    requestAnimationFrame(update);
+}
+
+update();
+</script>
+</body>
+</html>
