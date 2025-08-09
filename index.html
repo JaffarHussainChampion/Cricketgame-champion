@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Side-View Mobile Cricket</title>
+<style>
+  :root{--bg:#042533;--pitch:#b98e5a;--grass:#2f8b2f;--panel:#051826;--accent:#ffb347}
+  html,body{height:100%;margin:0;font-family:Inter,Arial,Helvetica,sans-serif;background:var(--bg);color:#e6eef8;-webkit-tap-highlight-color:transparent}
+  #wrap{max-width:1100px;margin:0 auto;padding:8px}
+  canvas{display:block;width:100%;height:70vh;border-radius:8px;background:linear-gradient(#06354a,#03262c)}
+  .hud{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:8px}
+  .panel{background:var(--panel);padding:8px 12px;border-radius:10px;min-width:120px;text-align:center}
+  .controls{display:flex;gap:8px;align-items:center}
+  button{background:var(--accent);color:#072533;border:none;padding:10px 12px;border-radius:8px;font-weight:700;min-width:84px}
+  .small{font-size:12px;color:#9fb7d4;margin-top:6px}
+  .center{display:flex;flex-direction:column;align-items:center;gap:6px}
+  @media (max-width:520px){ button{min-width:70px;padding:8px 10px} canvas{height:64vh} }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" aria-label="Side view cricket game"></canvas>
+
+  <div class="hud">
+    <div class="panel center">
+      <div style="font-size:18px">Score <strong id="score">0</strong>/<span id="wickets">0</span></div>
+      <div class="small">Overs <span id="overs">0.0</span> • Balls <span id="balls">0</span></div>
+    </div>
+
+    <div class="panel center">
+      <div id="message" style="font-weight:700">Tap <b>Bowl</b> to start</div>
+      <div class="small">Tap Swing or swipe to hit • Swipe up = loft</div>
+    </div>
+
+    <div class="controls">
+      <button id="bowlBtn">Bowl</button>
+      <button id="swingBtn">Swing</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Side-view mobile cricket game (single HTML file)
+   - Ball delivered right -> left
+   - Buttons: Bowl, Swing, Reset
+   - Swipe gestures to hit
+   - Scoreboard & simple physics
+*/
+
+// Canvas + HiDPI scaling
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let cssW, cssH, DPR;
+function resize(){
+  const rect = canvas.getBoundingClientRect();
+  cssW = rect.width || window.innerWidth - 16;
+  cssH = Math.max(360, Math.round(window.innerHeight * 0.68));
+  canvas.style.height = cssH + 'px';
+  DPR = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * DPR);
+  canvas.height = Math.floor(cssH * DPR);
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  layout();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Game state (CSS pixels)
+let pitch = {}, batsman = {}, bowler = {}, ball = null;
+let scoreboard = { runs:0, wickets:0, balls:0 };
+let inPlay=false, lastMessage='Ready';
+let postHit = null;
+let particles = [];
+
+// HUD elements
+const scoreEl = document.getElementById('score');
+const wicketsEl = document.getElementById('wickets');
+const oversEl = document.getElementById('overs');
+const ballsEl = document.getElementById('balls');
+const msgEl = document.getElementById('message');
+
+function layout(){
+  pitch = { groundY: Math.round(cssH * 0.75), left: Math.round(cssW*0.05), right: Math.round(cssW*0.95) };
+  batsman = { x: Math.round(cssW * 0.18), y: pitch.groundY, width: 36, height: 12, batXOffset: 40 };
+  bowler = { x: Math.round(cssW * 0.9), y: pitch.groundY - 8 };
+  ball = null;
+  postHit = null;
+  particles = [];
+  updateHUD();
+}
+
+function updateHUD(){
+  scoreEl.textContent = scoreboard.runs;
+  wicketsEl.textContent = scoreboard.wickets;
+  ballsEl.textContent = scoreboard.balls;
+  oversEl.textContent = `${Math.floor(scoreboard.balls/6)}.${scoreboard.balls%6}`;
+  msgEl.textContent = lastMessage;
+}
+
+// Sound (WebAudio)
+let audioCtx=null;
+function ensureAudio(){ if(!audioCtx){ try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ audioCtx=null; } } if(audioCtx && audioCtx.state==='suspended') audioCtx.resume().catch(()=>{}); }
+function sfx(freq,dur,vol=0.06,type='sine'){ if(!audioCtx) return; const o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type=type; o.frequency.value=freq; g.gain.value=vol; o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime+dur); }
+function batHit(){ sfx(900,0.03,0.08,'square'); sfx(600,0.05,0.06,'sine'); }
+function cheer(){ for(let i=0;i<5;i++) setTimeout(()=>sfx(400+Math.random()*300,0.07,0.03,'sawtooth'), i*70 + Math.random()*40); }
+function stump(){ sfx(120,0.12,0.18,'sine'); sfx(220,0.06,0.08,'square'); }
+
+// Particles
+function spawnParticles(x,y,color='#ffd36b',count=12){
+  for(let i=0;i<count;i++) particles.push({
+    x, y,
+    vx:(Math.random()-0.5)*6,
+    vy:(Math.random()-2.5)*6,
+    life:30 + Math.random()*40,
+    color
+  });
+}
+
+// Bowling: create ball delivered from bowler -> batsman area
+const deliveries = [
+  {name:'Normal', speed:[8,11], pitchOffset:0},
+  {name:'Yorker', speed:[12,14], pitchOffset:10},
+  {name:'Bouncer', speed:[9,11], pitchOffset:-30},
+  {name:'Slower', speed:[6,8], pitchOffset:20},
+];
+
+function bowl(){
+  ensureAudio();
+  if(inPlay) { lastMessage='Ball already in play'; updateHUD(); return; }
+  const d = deliveries[Math.floor(Math.random()*deliveries.length)];
+  const startX = bowler.x - 12, startY = bowler.y - 40;
+  const targetX = batsman.x + batsman.batXOffset + Math.random()*20 - 10;
+  const targetY = pitch.groundY - 18 + d.pitchOffset;
+  const speed = rand(d.speed[0], d.speed[1]);
+  const angle = Math.atan2(targetY - startY, targetX - startX) + rand(-0.08, 0.08);
+  ball = {
+    x: startX, y: startY,
+    vx: speed * Math.cos(angle),
+    vy: speed * Math.sin(angle),
+    r: 7 + Math.random()*1.5,
+    live:true, bounced:false, origin:d.name
+  };
+  inPlay = true;
+  scoreboard.balls++;
+  lastMessage = 'Bowled — ' + d.name;
+  updateHUD();
+}
+
+// Physics & hit evaluation
+const GRAV = 0.42, DRAG = 0.996, PFRIC = 0.68;
+
+function updatePhysics(){
+  if(ball && ball.live && inPlay){
+    ball.vy += GRAV * 0.6;
+    ball.vx *= DRAG; ball.vy *= DRAG;
+    // swing/swing curvature: small spin for variety
+    ball.x += ball.vx; ball.y += ball.vy;
+    // bounce on pitch
+    if(ball.y + ball.r >= pitch.groundY - 6 && ball.vy > 0){
+      ball.y = pitch.groundY - 6 - ball.r;
+      ball.vy *= -PFRIC;
+      ball.vx *= 0.98;
+      ball.bounced = true;
+      if(Math.abs(ball.vy) < 1.6) ball.vy = 0;
+    }
+    // if passes batsman stumps and close vertically -> bowled
+    if(ball.x < batsman.x + 10 && ball.y > pitch.groundY - 12){
+      // misses and hits stumps
+      scoreboard.wickets++;
+      lastMessage = 'Bowled! WICKET';
+      stump(); spawnParticles(batsman.x+8, batsman.y-30,'#c12b2b',18);
+      inPlay = false; ball.live = false; postHit = null;
+      updateHUD();
+    }
+    // bat collision (simple box region near bat)
+    if(ball.live){
+      const batTipX = batsman.x + batsman.batXOffset;
+      const batTipY = batsman.y - 22;
+      const dx = ball.x - batTipX, dy = ball.y - batTipY;
+      const dist2 = dx*dx + dy*dy;
+      if(dist2 < (ball.r + 36)*(ball.r + 36) && recentSwing){ // recentSwing set when player swings
+        // Compute refl velocities based on swing power
+        const power = clamp(recentSwing.power, 0.8, 3.5);
+        // Reflect and add power
+        const nx = -1; const ny = -0.2;
+        let rvx = (Math.abs(ball.vx) + 2*power) * nx + rand(-1,1);
+        let rvy = (ball.vy * -1) * (1 + power*0.15) + rand(-1,1) - power*0.3;
+        ball.vx = rvx; ball.vy = rvy;
+        ball.live = false; inPlay = false;
+        postHit = { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy, life:160 };
+        batHit(); spawnParticles(ball.x, ball.y,'#fff',12);
+        evaluateHit(Math.hypot(ball.vx, ball.vy));
+        recentSwing = null;
+      }
+    }
+  }
+
+  // post hit flight (visual)
+  if(postHit && postHit.life > 0){
+    postHit.vy += GRAV*0.8;
+    postHit.x += postHit.vx; postHit.y += postHit.vy;
+    postHit.life--;
+  } else if(postHit && postHit.life <= 0){
+    postHit = null;
+  }
+
+  // particles
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.18; p.life--;
+    if(p.life <= 0) particles.splice(i,1);
+  }
+}
+
+// Evaluate hit outcome and add runs/wicket
+function evaluateHit(speed){
+  const loft = clamp(- (postHit ? postHit.vy : ball.vy) / 14, 0, 3);
+  const scoreMetric = Math.abs(speed) * 3 + loft*80 + rand(-20,30);
+  let runs = 0, ev='Played';
+  if(scoreMetric > 520 || speed > 30){ runs=6; ev='SIX!'; cheer(); spawnParticles(batsman.x+260,batsman.y-160,'#ffd36b',26); }
+  else if(scoreMetric > 300 || speed>20){ runs=4; ev='FOUR!'; cheer(); spawnParticles(batsman.x+200,batsman.y-120,'#fff',18); }
+  else if(scoreMetric > 180){ runs=3; ev='3 runs'; }
+  else if(scoreMetric > 90){ runs=2; ev='2 runs'; }
+  else if(scoreMetric > 30){ runs=1; ev='1 run'; }
+  else {
+    // low-power hit -> small chance of catch/wicket
+    if(Math.random() < 0.14){ runs=0; scoreboard.wickets++; ev='Caught! WICKET'; stump(); spawnParticles(batsman.x+40,batsman.y-40,'#c12b2b',18); }
+    else { runs=0; ev='Dot ball'; }
+  }
+  scoreboard.runs += runs;
+  lastMessage = ev;
+  updateHUD();
+}
+
+// Swing handling (button or swipe)
+let recentSwing = null;
+function swing(power=1.6){
+  // power = 1 (timing) .. higher for stronger swings
+  recentSwing = { time: Date.now(), power };
+  lastMessage = 'Swung';
+  updateHUD();
+}
+
+// Controls
+document.getElementById('bowlBtn').addEventListener('click', ()=> bowl());
+document.getElementById('swingBtn').addEventListener('click', ()=> { ensureAudio(); swing(2.2); });
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  scoreboard = { runs:0, wickets:0, balls:0 };
+  ball=null; postHit=null; inPlay=false; recentSwing=null; lastMessage='Reset - Tap Bowl';
+  updateHUD();
+});
+
+// Touch swipe to swing: detect direction & speed to vary power
+let tStart = null;
+canvas.addEventListener('touchstart', (e)=>{
+  ensureAudio();
+  if(e.touches && e.touches.length===1){
+    const r = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    tStart = { x: t.clientX - r.left, y: t.clientY - r.top, time: Date.now() };
+  }
+}, {passive:true});
+
+canvas.addEventListener('touchend', (e)=>{
+  if(!tStart) return;
+  const r = canvas.getBoundingClientRect();
+  const t = (e.changedTouches && e.changedTouches[0]) ? e.changedTouches[0] : null;
+  if(!t) { tStart = null; return; }
+  const tEnd = { x: t.clientX - r.left, y: t.clientY - r.top, time: Date.now() };
+  const dx = tEnd.x - tStart.x, dy = tStart.y - tEnd.y; // dy positive => swipe up
+  const dist = Math.hypot(dx, dy);
+  const dt = Math.max(8, tEnd.time - tStart.time);
+  const speed = dist / dt;
+  if(dist > 18 && inPlay && ball && ball.x < batsman.x + 160){
+    // map swipe to power: upward component increases loft and power
+    const p = clamp(1 + (dist/60) + speed*0.9 + (dy > 0 ? 0.8 : 0), 0.8, 4.5);
+    swing(p);
+  } else {
+    lastMessage = (inPlay ? 'Too early / no contact' : 'No ball to hit');
+    updateHUD();
+  }
+  tStart = null;
+}, {passive:true});
+
+// Draw functions
+function draw(){
+  // background (sky)
+  const skyGrad = ctx.createLinearGradient(0,0,0,pitch.groundY);
+  skyGrad.addColorStop(0,'#06354a'); skyGrad.addColorStop(1,'#03262c');
+  ctx.fillStyle = skyGrad; ctx.fillRect(0,0,cssW,pitch.groundY);
+
+  // stadium bands
+  for(let i=0;i<4;i++){ ctx.fillStyle = `rgba(255,255,255,${0.01+i*0.007})`; ctx.fillRect(0, 16 + i*18, cssW, 8); }
+
+  // pitch strip
+  const px = cssW*0.12, pw = cssW*0.76;
+  ctx.fillStyle = '--unused';
+  ctx.fillStyle = '#b88b58';
+  ctx.fillRect(px, pitch.groundY - 14, pw, 14);
+
+  // draw stumps near batsman
+  const sX = batsman.x + 8, sY = pitch.groundY - 14;
+  ctx.fillStyle = '#7a4f2b';
+  ctx.fillRect(sX - 10, sY - 34, 6, 34);
+  ctx.fillRect(sX - 2, sY - 34, 6, 34);
+  ctx.fillRect(sX + 6, sY - 34, 6, 34);
+
+  // draw bowler
+  ctx.fillStyle = '#f2d8b2'; ctx.beginPath(); ctx.arc(bowler.x, bowler.y - 44, 12, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#8b3d85'; ctx.fillRect(bowler.x - 10, bowler.y - 34, 20, 28);
+
+  // draw batsman
+  ctx.fillStyle = '#f2d8b2'; ctx.beginPath(); ctx.arc(batsman.x, batsman.y - 44, 14, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#1f6ea3'; ctx.fillRect(batsman.x - 10, batsman.y - 34, 20, 30);
+  // bat (rotated slightly when swing requested)
+  ctx.save();
+  const batBaseX = batsman.x + batsman.batXOffset, batBaseY = batsman.y - 22;
+  ctx.translate(batBaseX, batBaseY);
+  const batAngle = recentSwing ? -0.9 * Math.min(1, recentSwing.power/3) : -0.25;
+  ctx.rotate(batAngle);
+  ctx.fillStyle = '#b86f2f'; ctx.fillRect(-8, -4, 96, 8);
+  ctx.restore();
+
+  // draw ball (delivery)
+  if(ball && ball.live){
+    ctx.beginPath(); ctx.fillStyle = '#fff'; ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.strokeStyle='#b20000'; ctx.lineWidth=1; ctx.moveTo(ball.x - ball.r*0.6, ball.y - ball.r*0.6); ctx.lineTo(ball.x + ball.r*0.6, ball.y + ball.r*0.6); ctx.stroke();
+  }
+
+  // postHit visual ball
+  if(postHit){
+    ctx.beginPath(); ctx.fillStyle = '#fff'; ctx.arc(postHit.x, postHit.y, 8, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.strokeStyle='#b20000'; ctx.moveTo(postHit.x-6, postHit.y-6); ctx.lineTo(postHit.x+6, postHit.y+6); ctx.stroke();
+  }
+
+  // particles
+  for(const p of particles){
+    ctx.globalAlpha = Math.max(0, p.life/60); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1;
+  }
+
+  // HUD overlay
+  ctx.fillStyle = '#e6eef8'; ctx.font = '14px Inter, Arial'; ctx.fillText(lastMessage, 12, 22);
+  ctx.fillStyle = '#9fb7d4'; ctx.font = '12px Inter, Arial'; ctx.fillText(`Score: ${scoreboard.runs} / ${scoreboard.wickets}  Balls: ${scoreboard.balls}`, 12, 44);
+}
+
+function loop(ts){
+  updatePhysics();
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// small helpers
+function rand(a,b){ return Math.random()*(b-a)+a; }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+</script>
+</body>
+</html>p
