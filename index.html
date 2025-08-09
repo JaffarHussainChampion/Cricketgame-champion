@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Side-View Cricket with Moving Bat</title>
+<style>
+  body {
+    margin:0; background:#0a2a3c; color:#eee; font-family:sans-serif;
+    overflow-x:hidden;
+    user-select:none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #game {
+    position: relative;
+    max-width: 600px;
+    margin: auto;
+    background: linear-gradient(to top, #654321 70%, #3b7926 30%, #87ceeb 0%);
+    height: 400px;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+  }
+  #controls {
+    max-width: 600px;
+    margin: 10px auto;
+    text-align: center;
+  }
+  button {
+    background: #1b6ca8;
+    color: #fff;
+    border: none;
+    padding: 14px 20px;
+    margin: 5px;
+    font-size: 16px;
+    border-radius: 8px;
+    user-select:none;
+  }
+  button:active {
+    background: #155d8a;
+  }
+  #scoreboard {
+    max-width: 600px;
+    margin: 10px auto;
+    font-size: 18px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div id="game">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="scoreboard">
+  Score: <span id="runs">0</span> / <span id="wickets">0</span> &nbsp;&nbsp; Balls: <span id="balls">0</span>
+</div>
+
+<div id="controls">
+  <button id="btn-left">◀ Move Left</button>
+  <button id="btn-swing">🏏 Swing</button>
+  <button id="btn-right">Move Right ▶</button>
+  <button id="btn-bowl">🎾 Bowl</button>
+  <button id="btn-reset">🔄 Reset</button>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Responsive canvas size
+  const width = 600;
+  const height = 400;
+  canvas.width = width;
+  canvas.height = height;
+
+  // Game variables
+  let runs = 0;
+  let wickets = 0;
+  let balls = 0;
+
+  // Bat variables
+  const batWidth = 60;
+  const batHeight = 15;
+  let batX = width * 0.1;
+  const batY = height - 70;
+  const batSpeed = 8;
+  let swinging = false;
+  let swingFrame = 0;
+
+  // Ball variables
+  let ballX = width - 30;
+  let ballY = batY - 10;
+  const ballRadius = 8;
+  let ballSpeedX = -10;
+  let ballSpeedY = 0;
+  const gravity = 0.6;
+  let ballMoving = false;
+
+  // Flags
+  let gameOver = false;
+
+  // DOM elements
+  const runsEl = document.getElementById('runs');
+  const wicketsEl = document.getElementById('wickets');
+  const ballsEl = document.getElementById('balls');
+
+  // Buttons
+  const btnLeft = document.getElementById('btn-left');
+  const btnRight = document.getElementById('btn-right');
+  const btnSwing = document.getElementById('btn-swing');
+  const btnBowl = document.getElementById('btn-bowl');
+  const btnReset = document.getElementById('btn-reset');
+
+  function resetGame() {
+    runs = 0;
+    wickets = 0;
+    balls = 0;
+    ballMoving = false;
+    ballX = width - 30;
+    ballY = batY - 10;
+    swinging = false;
+    swingFrame = 0;
+    gameOver = false;
+    updateScoreboard();
+  }
+
+  function updateScoreboard() {
+    runsEl.textContent = runs;
+    wicketsEl.textContent = wickets;
+    ballsEl.textContent = balls;
+  }
+
+  // Draw the pitch background
+  function drawPitch() {
+    ctx.fillStyle = '#654321'; // pitch brown
+    ctx.fillRect(width * 0.05, batY + batHeight, width * 0.9, 50);
+
+    // Stumps at batsman end
+    const stumpX = batX + batWidth + 10;
+    const stumpY = batY + batHeight;
+    ctx.fillStyle = '#8B4513';
+    for (let i = 0; i < 3; i++) {
+      ctx.fillRect(stumpX + i * 10, stumpY, 4, 30);
+    }
+  }
+
+  // Draw batsman and bat
+  function drawBat() {
+    // Draw batsman (simple circle head and body)
+    ctx.fillStyle = '#f2d8b2';
+    ctx.beginPath();
+    ctx.arc(batX + batWidth/2, batY - 25, 15, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillRect(batX + batWidth/2 - 12, batY - 25, 24, 40);
+
+    // Draw bat swinging
+    ctx.save();
+    ctx.translate(batX + batWidth, batY + 5);
+    if (swinging) {
+      const maxSwing = Math.PI / 3;
+      const angle = maxSwing * Math.sin((swingFrame / 10) * Math.PI);
+      ctx.rotate(-angle);
+    }
+    ctx.fillStyle = '#b86f2f';
+    ctx.fillRect(0, -5, 60, 12);
+    ctx.restore();
+  }
+
+  // Draw ball
+  function drawBall() {
+    ctx.beginPath();
+    ctx.fillStyle = '#fff';
+    ctx.arc(ballX, ballY, ballRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#b20000';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(ballX - ballRadius * 0.6, ballY - ballRadius * 0.6);
+    ctx.lineTo(ballX + ballRadius * 0.6, ballY + ballRadius * 0.6);
+    ctx.stroke();
+  }
+
+  // Physics update
+  function updateBall() {
+    if (!ballMoving) return;
+
+    ballX += ballSpeedX;
+    ballY += ballSpeedY;
+    ballSpeedY += gravity;
+
+    // Bounce on pitch
+    const pitchTop = batY + batHeight;
+    const pitchBottom = pitchTop + 50;
+    if (ballY + ballRadius > pitchBottom) {
+      ballY = pitchBottom - ballRadius;
+      ballSpeedY *= -0.6;
+      ballSpeedX *= 0.8;
+    }
+
+    // Ball past bat and low => wicket (bowled)
+    if (ballX < batX + batWidth && ballY > pitchTop - 5 && ballY < pitchBottom + 10 && !gameOver) {
+      wickets++;
+      balls++;
+      updateScoreboard();
+      gameOver = true;
+      ballMoving = false;
+      alert('Bowled! WICKET');
+    }
+
+    // Ball goes out of left screen => dot ball or runs if hit
+    if (ballX < -20) {
+      balls++;
+      updateScoreboard();
+      ballMoving = false;
+      gameOver = false;
+    }
+  }
+
+  // Check collision bat/ball during swing
+  function checkHit() {
+    if (!ballMoving || !swinging) return false;
+
+    // Bat hit box approx:
+    const batTipX = batX + batWidth + 40 * Math.sin((swingFrame / 10) * Math.PI);
+    const batTipY = batY + 5 - 40 * Math.cos((swingFrame / 10) * Math.PI);
+
+    // Distance between bat tip and ball
+    const dx = ballX - batTipX;
+    const dy = ballY - batTipY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < ballRadius + 10) {
+      return true;
+    }
+    return false;
+  }
+
+  // Handle hit outcome
+  function onHit() {
+    // Add runs based on ball speed and angle
+    const speed = Math.abs(ballSpeedX) + Math.abs(ballSpeedY);
+    let runScored = 0;
+
+    if (speed > 20) {
+      runScored = 6; // big hit
+      alert('SIX! 🎉');
+    } else if (speed > 14) {
+      runScored = 4;
+      alert('FOUR! 🎉');
+    } else if (speed > 9) {
+      runScored = 2;
+    } else if (speed > 6) {
+      runScored = 1;
+    } else {
+      runScored = 0;
+    }
+
+    runs += runScored;
+    balls++;
+    updateScoreboard();
+
+    // Ball flies off screen after hit
+    ballSpeedX = 10 + Math.random() * 4;
+    ballSpeedY = -5 - Math.random() * 3;
+  }
+
+  // Game loop
+  function loop() {
+    ctx.clearRect(0, 0, width, height);
+
+    drawPitch();
+    drawBat();
+    drawBall();
+
+    if (ballMoving) updateBall();
+
+    if (swinging) {
+      swingFrame++;
+      if (swingFrame > 20) {
+        swinging = false;
+        swingFrame = 0;
+      } else if (checkHit()) {
+        onHit();
+        swinging = false;
+      }
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  // Controls
+  btnLeft.addEventListener('click', () => {
+    if (batX > 0) batX -= batSpeed;
+  });
+  btnRight.addEventListener('click', () => {
+    if (batX < width - batWidth - 60) batX += batSpeed;
+  });
+  btnSwing.addEventListener('click', () => {
+    if (!swinging && ballMoving) {
+      swinging = true;
+      swingFrame = 0;
+    }
+  });
+  btnBowl.addEventListener('click', () => {
+    if (!ballMoving) {
+      ballX = width - 30;
+      ballY = batY - 10;
+      ballSpeedX = -8 - Math.random() * 3;
+      ballSpeedY = -4 - Math.random() * 2;
+      ballMoving = true;
+      gameOver = false;
+    }
+  });
+  btnReset.addEventListener('click', () => {
+    resetGame();
+  });
+
+  // Swipe support for swing
+  let touchStartX = null;
+  let touchStartY = null;
+  let touchEndX = null;
+  let touchEndY = null;
+
+  canvas.addEventListener('touchstart', (e) => {
+    const t = e.touches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+  }, {passive: true});
+
+  canvas.addEventListener('touchend', (e) => {
+    if (!touchStartX || !touchStartY) return;
+    const t = e.changedTouches[0];
+    touchEndX = t.clientX;
+    touchEndY = t.clientY;
+    const dx = touchEndX - touchStartX;
+    const dy = touchEndY - touchStartY;
+
+    // Simple swipe detection - mainly vertical swipe for swing
+    if (Math.abs(dy) > 30 && Math.abs(dy) > Math.abs(dx)) {
+      if (!swinging && ballMoving) {
+        swinging = true;
+        swingFrame = 0;
+      }
+    }
+    touchStartX = null;
+    touchStartY = null;
+  }, {passive: true});
+
+  resetGame();
+  loop();
+})();
+</script>
+
+</body>
+</html>
